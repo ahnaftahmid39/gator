@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"strconv"
 
 	// "encoding/json"
 	"fmt"
@@ -14,7 +15,7 @@ import (
 	"github.com/ahnaftahmid39/gator/internal/database"
 	"github.com/ahnaftahmid39/gator/internal/rss"
 	"github.com/google/uuid"
-	_ "github.com/lib/pq"
+	"github.com/lib/pq"
 )
 
 type state struct {
@@ -150,6 +151,41 @@ func scrapeFeeds(s *state) error {
 
 	for _, item := range feed.Channel.Item {
 		fmt.Println("*", item.Title)
+		publishDate, err := time.Parse(time.RFC1123Z, item.PubDate)
+		if err != nil {
+			return fmt.Errorf("error parsing publish date, %w", err)
+		}
+		_, err = s.db.CreatePost(ctx, database.CreatePostParams{
+			ID: uuid.New(),
+			CreatedAt: sql.NullTime{
+				Time:  time.Now(),
+				Valid: true,
+			},
+			UpdatedAt: sql.NullTime{
+				Time:  time.Now(),
+				Valid: true,
+			},
+			Title: sql.NullString{
+				String: item.Title,
+				Valid:  true,
+			},
+			Description: sql.NullString{
+				String: item.Description,
+				Valid:  true,
+			},
+			Url: item.Link,
+			PublishedAt: sql.NullTime{
+				Time:  publishDate,
+				Valid: true,
+			},
+			FeedID: feedToFetch.ID,
+		})
+
+		if err != nil {
+			if pqErr, ok := err.(*pq.Error); !ok || pqErr.Code != "23505" {
+				return fmt.Errorf("error creating post, %w", err)
+			}
+		}
 	}
 	fmt.Println("-------------------")
 	return nil
@@ -321,6 +357,41 @@ func handleUnfollow(s *state, cmd command, user database.User) error {
 	return nil
 }
 
+func handleBrowse(s *state, cmd command, user database.User) error {
+
+	limit := 2
+	if len(cmd.args) > 0 {
+		l, err := strconv.Atoi(cmd.args[0])
+		if err != nil {
+			return fmt.Errorf("error parsing argument limit, %w", err)
+		}
+		limit = l
+	}
+	posts, err := s.db.GetPostsForUser(context.Background(), database.GetPostsForUserParams{
+		UserID: user.ID,
+		Limit:  int32(limit),
+	})
+
+	if err != nil {
+		return fmt.Errorf("error getting posts for user, %w", err)
+	}
+
+	for i, post := range posts {
+		fmt.Printf("%v. ", i+1)
+		if post.Title.Valid {
+			fmt.Println(post.Title.String)
+		}
+		fmt.Println(post.Url)
+		if post.Description.Valid {
+			fmt.Println(post.Description.String)
+		}
+		fmt.Println()
+	}
+
+	return nil
+
+}
+
 func middlewareLoggedIn(
 	handler func(s *state, cmd command, user database.User) error,
 ) func(*state, command) error {
@@ -372,6 +443,7 @@ func main() {
 	cmds.register("following", middlewareLoggedIn(handleFollowing))
 	cmds.register("unfollow", middlewareLoggedIn(handleUnfollow))
 	cmds.register("removefeed", middlewareLoggedIn(handleRemoveFeed))
+	cmds.register("browse", middlewareLoggedIn(handleBrowse))
 
 	// handle command
 	if len(os.Args) < 2 {
