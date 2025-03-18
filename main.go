@@ -123,17 +123,55 @@ func handlerLogin(s *state, cmd command) error {
 	return nil
 }
 
-func handleAggregator(s *state, cmd command) error {
+func scrapeFeeds(s *state) error {
 	ctx := context.Background()
-	feed, err := rss.FetchFeed(ctx, "https://www.wagslane.dev/index.xml")
+	feedToFetch, err := s.db.GetNextFeedToFetch(ctx)
+	if err != nil {
+		return fmt.Errorf("error retrieving next feed to fetch, %w", err)
+	}
 
+	fmt.Printf("----Fetchin %s-----\n", feedToFetch.Name)
+	feed, err := rss.FetchFeed(ctx, feedToFetch.Url)
 	if err != nil {
 		return err
 	}
 
-	fmt.Println(feed)
+	_, err = s.db.MarkFeedFetchedById(ctx, database.MarkFeedFetchedByIdParams{
+		ID: feedToFetch.ID,
+		LastFetchedAt: sql.NullTime{
+			Time:  time.Now(),
+			Valid: true,
+		},
+	})
 
+	if err != nil {
+		return fmt.Errorf("error marking feed fetched by id, %w", err)
+	}
+
+	for _, item := range feed.Channel.Item {
+		fmt.Println("*", item.Title)
+	}
+	fmt.Println("-------------------")
 	return nil
+}
+
+func handleAggregator(s *state, cmd command) error {
+	if len(cmd.args) < 1 {
+		return fmt.Errorf("missing arguments. syntax: agg <time_between_reqs>")
+	}
+
+	duration, err := time.ParseDuration(cmd.args[0])
+	if err != nil {
+		return fmt.Errorf("error parsing time_between_reqs. Valid examples: 1s, 10h10m1s, 10m etc, Error: %w", err)
+	}
+
+	t := time.NewTicker(duration)
+	for ; ; <-t.C {
+		err = scrapeFeeds(s)
+		if err != nil {
+			return err
+		}
+	}
 }
 
 func handleAddFeed(s *state, cmd command, user database.User) error {
@@ -184,6 +222,24 @@ func handleAddFeed(s *state, cmd command, user database.User) error {
 
 	return nil
 
+}
+
+func handleRemoveFeed(s *state, cmd command, user database.User) error {
+	if len(cmd.args) < 1 {
+		return fmt.Errorf("missing arguments. Syntax: removefeed <feed_url>")
+	}
+
+	deletedFeed, err := s.db.DeleteFeedByUrlAndUser(context.Background(), database.DeleteFeedByUrlAndUserParams{
+		Url:    cmd.args[0],
+		UserID: user.ID,
+	})
+
+	if err != nil {
+		return fmt.Errorf("error deleting feed by url and user_id, you are likely trying to remove a feed that isn't yours, %w", err)
+	}
+
+	fmt.Println("Successfully deleted feed", deletedFeed.Name)
+	return nil
 }
 
 func handleFeeds(s *state, cmd command) error {
@@ -246,6 +302,25 @@ func handleFollowing(s *state, cmd command, user database.User) error {
 	return nil
 }
 
+func handleUnfollow(s *state, cmd command, user database.User) error {
+	if len(cmd.args) < 1 {
+		return fmt.Errorf("not enough arguments. Need feed_url. Syntax: unfollow <feed_url>")
+	}
+
+	err := s.db.DeleteFeedFollowByFeedUrlAndUserId(context.Background(), database.DeleteFeedFollowByFeedUrlAndUserIdParams{
+		Url:    cmd.args[0],
+		UserID: user.ID,
+	})
+
+	if err != nil {
+		return fmt.Errorf("error deleting feed follow by feed url and userid, %w", err)
+	}
+
+	fmt.Println("Successfully unfollowed feed")
+
+	return nil
+}
+
 func middlewareLoggedIn(
 	handler func(s *state, cmd command, user database.User) error,
 ) func(*state, command) error {
@@ -258,7 +333,6 @@ func middlewareLoggedIn(
 
 		return handler(s, cmd, user)
 	}
-
 }
 
 func main() {
@@ -296,6 +370,8 @@ func main() {
 	cmds.register("feeds", handleFeeds)
 	cmds.register("follow", middlewareLoggedIn(handleFollow))
 	cmds.register("following", middlewareLoggedIn(handleFollowing))
+	cmds.register("unfollow", middlewareLoggedIn(handleUnfollow))
+	cmds.register("removefeed", middlewareLoggedIn(handleRemoveFeed))
 
 	// handle command
 	if len(os.Args) < 2 {
