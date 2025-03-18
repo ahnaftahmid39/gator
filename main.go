@@ -168,9 +168,22 @@ func handleAddFeed(s *state, cmd command) error {
 	}
 
 	pretty, _ := json.MarshalIndent(feed, "", "  ")
-	fmt.Printf("The Filter has been created and set in config. Filter:\n%+v\n", string(pretty))
+	fmt.Printf("The Feed has been Created. Feed:\n%+v\n", string(pretty))
 	return nil
 
+}
+
+func handleFeeds(s *state, cmd command) error {
+	ctx := context.Background()
+	feeds, err := s.db.GetAllFeeds(ctx)
+	if err != nil {
+		return fmt.Errorf("error getting all the feeds, %w", err)
+	}
+	for _, feed := range feeds {
+		fmt.Println("Feed Name:", feed.Name, "Feed URL:", feed.Url, "Feed Created By:", feed.UserName)
+	}
+
+	return nil
 }
 
 func main() {
@@ -205,6 +218,7 @@ func main() {
 	cmds.register("users", handleUsers)
 	cmds.register("agg", handleAggregator)
 	cmds.register("addfeed", handleAddFeed)
+	cmds.register("feeds", handleFeeds)
 
 	// handle command
 	if len(os.Args) < 2 {
