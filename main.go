@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 
 	// "encoding/json"
 	"fmt"
@@ -76,10 +77,7 @@ func handleRegister(s *state, cmd command) error {
 
 	ctx := context.Background()
 	_, err := s.db.CreateUser(ctx, database.CreateUserParams{
-		ID: uuid.NullUUID{
-			UUID:  uuid.New(),
-			Valid: true,
-		},
+		ID:   uuid.New(),
 		Name: userName,
 		CreatedAt: sql.NullTime{
 			Time:  time.Now(),
@@ -138,6 +136,43 @@ func handleAggregator(s *state, cmd command) error {
 	return nil
 }
 
+func handleAddFeed(s *state, cmd command) error {
+	if len(cmd.args) < 2 {
+		return fmt.Errorf("not enough arguments, command syntax: addfeed <feed_name> <feed_url>")
+	}
+
+	ctx := context.Background()
+	user, err := s.db.GetUserByName(ctx, s.cfg.CurrentUserName)
+
+	if err != nil {
+		return fmt.Errorf("error encountered while getting user: %w", err)
+	}
+
+	feed, err := s.db.CreateFeed(ctx, database.CreateFeedParams{
+		ID:   uuid.New(),
+		Name: cmd.args[0],
+		Url:  cmd.args[1],
+		CreatedAt: sql.NullTime{
+			Time:  time.Now(),
+			Valid: true,
+		},
+		UpdatedAt: sql.NullTime{
+			Time:  time.Now(),
+			Valid: true,
+		},
+		UserID: user.ID,
+	})
+
+	if err != nil {
+		return err
+	}
+
+	pretty, _ := json.MarshalIndent(feed, "", "  ")
+	fmt.Printf("The Filter has been created and set in config. Filter:\n%+v\n", string(pretty))
+	return nil
+
+}
+
 func main() {
 	// read config
 	cfg, err := config.Read()
@@ -169,6 +204,7 @@ func main() {
 	cmds.register("reset", handleReset)
 	cmds.register("users", handleUsers)
 	cmds.register("agg", handleAggregator)
+	cmds.register("addfeed", handleAddFeed)
 
 	// handle command
 	if len(os.Args) < 2 {

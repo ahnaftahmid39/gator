@@ -1,10 +1,10 @@
 -- +goose Up
-create table users (
-  id UUID,
+CREATE TABLE users (
+  id UUID PRIMARY KEY,
   created_at TIMESTAMP,
   updated_at TIMESTAMP,
   name TEXT NOT NULL UNIQUE
 );
 
 -- +goose Down
-drop table users;
+DROP TABLE users;
