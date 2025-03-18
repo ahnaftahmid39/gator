@@ -76,7 +76,7 @@ func handleRegister(s *state, cmd command) error {
 	userName := cmd.args[0]
 
 	ctx := context.Background()
-	_, err := s.db.CreateUser(ctx, database.CreateUserParams{
+	user, err := s.db.CreateUser(ctx, database.CreateUserParams{
 		ID:   uuid.New(),
 		Name: userName,
 		CreatedAt: sql.NullTime{
@@ -98,8 +98,8 @@ func handleRegister(s *state, cmd command) error {
 		return err
 	}
 
-	// pretty, _ := json.MarshalIndent(user, "", "  ")
-	// fmt.Printf("the user has been created and set in config. User:\n%+v\n", string(pretty))
+	pretty, _ := json.MarshalIndent(user, "", "  ")
+	fmt.Printf("the user has been created and set in config. User:\n%+v\n", string(pretty))
 	return nil
 }
 
@@ -136,18 +136,12 @@ func handleAggregator(s *state, cmd command) error {
 	return nil
 }
 
-func handleAddFeed(s *state, cmd command) error {
+func handleAddFeed(s *state, cmd command, user database.User) error {
 	if len(cmd.args) < 2 {
 		return fmt.Errorf("not enough arguments, command syntax: addfeed <feed_name> <feed_url>")
 	}
 
 	ctx := context.Background()
-	user, err := s.db.GetUserByName(ctx, s.cfg.CurrentUserName)
-
-	if err != nil {
-		return fmt.Errorf("error encountered while getting user: %w", err)
-	}
-
 	feed, err := s.db.CreateFeed(ctx, database.CreateFeedParams{
 		ID:   uuid.New(),
 		Name: cmd.args[0],
@@ -164,11 +158,30 @@ func handleAddFeed(s *state, cmd command) error {
 	})
 
 	if err != nil {
-		return err
+		return fmt.Errorf("error creating a new feed, %w", err)
+	}
+
+	feed_follow, err := s.db.CreateFeedFollow(ctx, database.CreateFeedFollowParams{
+		CreatedAt: sql.NullTime{
+			Time:  time.Now(),
+			Valid: true,
+		},
+		UpdatedAt: sql.NullTime{
+			Time:  time.Now(),
+			Valid: true,
+		},
+		UserID: user.ID,
+		FeedID: feed.ID,
+	})
+
+	if err != nil {
+		return fmt.Errorf("error creating a feed follow, %w", err)
 	}
 
 	pretty, _ := json.MarshalIndent(feed, "", "  ")
-	fmt.Printf("The Feed has been Created. Feed:\n%+v\n", string(pretty))
+	fmt.Printf("The Feed has been created. Feed:\n%+v\n", string(pretty))
+	fmt.Printf("A Feed follow has been created. FeedName:%s, User: %s\n", feed_follow.FeedName, feed_follow.UserName)
+
 	return nil
 
 }
@@ -184,6 +197,68 @@ func handleFeeds(s *state, cmd command) error {
 	}
 
 	return nil
+}
+
+func handleFollow(s *state, cmd command, user database.User) error {
+	if len(cmd.args) < 1 {
+		return fmt.Errorf("follow command expects a feed url")
+	}
+
+	ctx := context.Background()
+	feed, err := s.db.GetFeedByUrl(ctx, cmd.args[0])
+	if err != nil {
+		return fmt.Errorf("error while getting feed by url, %w", err)
+	}
+
+	feed_follow, err := s.db.CreateFeedFollow(ctx, database.CreateFeedFollowParams{
+		CreatedAt: sql.NullTime{
+			Time:  time.Now(),
+			Valid: true,
+		},
+		UpdatedAt: sql.NullTime{
+			Time:  time.Now(),
+			Valid: true,
+		},
+		UserID: user.ID,
+		FeedID: feed.ID,
+	})
+
+	if err != nil {
+		return fmt.Errorf("error while creating feed follow, %w", err)
+	}
+
+	fmt.Println("Feed Name:", feed_follow.FeedName, ",User:", feed_follow.UserName)
+
+	return nil
+}
+
+func handleFollowing(s *state, cmd command, user database.User) error {
+	ctx := context.Background()
+	feed_follows, err := s.db.GetFeedFollowsForUser(ctx, user.ID)
+	if err != nil {
+		return fmt.Errorf("error while getting feed follows, %w", err)
+	}
+
+	for _, follow := range feed_follows {
+		fmt.Println("*", follow.FeedName)
+	}
+
+	return nil
+}
+
+func middlewareLoggedIn(
+	handler func(s *state, cmd command, user database.User) error,
+) func(*state, command) error {
+	return func(s *state, cmd command) error {
+		ctx := context.Background()
+		user, err := s.db.GetUserByName(ctx, s.cfg.CurrentUserName)
+		if err != nil {
+			return fmt.Errorf("error while getting current user information, %w", err)
+		}
+
+		return handler(s, cmd, user)
+	}
+
 }
 
 func main() {
@@ -217,8 +292,10 @@ func main() {
 	cmds.register("reset", handleReset)
 	cmds.register("users", handleUsers)
 	cmds.register("agg", handleAggregator)
-	cmds.register("addfeed", handleAddFeed)
+	cmds.register("addfeed", middlewareLoggedIn(handleAddFeed))
 	cmds.register("feeds", handleFeeds)
+	cmds.register("follow", middlewareLoggedIn(handleFollow))
+	cmds.register("following", middlewareLoggedIn(handleFollowing))
 
 	// handle command
 	if len(os.Args) < 2 {
