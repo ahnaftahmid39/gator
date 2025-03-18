@@ -3,13 +3,15 @@ package main
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
+
+	// "encoding/json"
 	"fmt"
 	"os"
 	"time"
 
 	"github.com/ahnaftahmid39/gator/internal/config"
 	"github.com/ahnaftahmid39/gator/internal/database"
+	"github.com/ahnaftahmid39/gator/internal/rss"
 	"github.com/google/uuid"
 	_ "github.com/lib/pq"
 )
@@ -43,6 +45,29 @@ func (c *commands) run(s *state, cmd command) error {
 	return nil
 }
 
+func handleReset(s *state, cmd command) error {
+	ctx := context.Background()
+	err := s.db.DeleteAllUsers(ctx)
+	return err
+}
+
+func handleUsers(s *state, cmd command) error {
+	ctx := context.Background()
+	users, err := s.db.GetUsers(ctx)
+	if err != nil {
+		return err
+	}
+	for _, user := range users {
+		if user.Name == s.cfg.CurrentUserName {
+			fmt.Printf("* %s (current)\n", user.Name)
+		} else {
+			fmt.Printf("* %s\n", user.Name)
+		}
+	}
+
+	return nil
+}
+
 func handleRegister(s *state, cmd command) error {
 	if len(cmd.args) == 0 {
 		return fmt.Errorf("the register handler expects a single argument, the username")
@@ -50,7 +75,7 @@ func handleRegister(s *state, cmd command) error {
 	userName := cmd.args[0]
 
 	ctx := context.Background()
-	user, err := s.db.CreateUser(ctx, database.CreateUserParams{
+	_, err := s.db.CreateUser(ctx, database.CreateUserParams{
 		ID: uuid.NullUUID{
 			UUID:  uuid.New(),
 			Valid: true,
@@ -75,8 +100,8 @@ func handleRegister(s *state, cmd command) error {
 		return err
 	}
 
-	pretty, _ := json.MarshalIndent(user, "", "  ")
-	fmt.Printf("the user has been created and set in config. User:\n%+v\n", string(pretty))
+	// pretty, _ := json.MarshalIndent(user, "", "  ")
+	// fmt.Printf("the user has been created and set in config. User:\n%+v\n", string(pretty))
 	return nil
 }
 
@@ -97,6 +122,19 @@ func handlerLogin(s *state, cmd command) error {
 	}
 
 	fmt.Printf("the user %s has been set\n", user.Name)
+	return nil
+}
+
+func handleAggregator(s *state, cmd command) error {
+	ctx := context.Background()
+	feed, err := rss.FetchFeed(ctx, "https://www.wagslane.dev/index.xml")
+
+	if err != nil {
+		return err
+	}
+
+	fmt.Println(feed)
+
 	return nil
 }
 
@@ -128,6 +166,9 @@ func main() {
 	}
 	cmds.register("login", handlerLogin)
 	cmds.register("register", handleRegister)
+	cmds.register("reset", handleReset)
+	cmds.register("users", handleUsers)
+	cmds.register("agg", handleAggregator)
 
 	// handle command
 	if len(os.Args) < 2 {
