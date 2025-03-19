@@ -11,6 +11,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/ahnaftahmid39/gator/internal/app"
 	"github.com/ahnaftahmid39/gator/internal/config"
 	"github.com/ahnaftahmid39/gator/internal/database"
 	"github.com/ahnaftahmid39/gator/internal/rss"
@@ -18,25 +19,15 @@ import (
 	"github.com/lib/pq"
 )
 
-type state struct {
-	cfg *config.Config
-	db  *database.Queries
-}
-
-type command struct {
-	name string
-	args []string
-}
-
 type commands struct {
-	cmdHandlerMap map[string]func(*state, command) error
+	cmdHandlerMap map[string]func(*app.State, app.Command) error
 }
 
-func (c *commands) register(name string, f func(*state, command) error) {
+func (c *commands) register(name string, f func(*app.State, app.Command) error) {
 	c.cmdHandlerMap[name] = f
 }
-func (c *commands) run(s *state, cmd command) error {
-	if handler, exists := c.cmdHandlerMap[cmd.name]; exists {
+func (c *commands) run(s *app.State, cmd app.Command) error {
+	if handler, exists := c.cmdHandlerMap[cmd.Name]; exists {
 		err := handler(s, cmd)
 		if err != nil {
 			return err
@@ -47,20 +38,20 @@ func (c *commands) run(s *state, cmd command) error {
 	return nil
 }
 
-func handleReset(s *state, cmd command) error {
+func handleReset(s *app.State, cmd app.Command) error {
 	ctx := context.Background()
-	err := s.db.DeleteAllUsers(ctx)
+	err := s.Db.DeleteAllUsers(ctx)
 	return err
 }
 
-func handleUsers(s *state, cmd command) error {
+func handleUsers(s *app.State, cmd app.Command) error {
 	ctx := context.Background()
-	users, err := s.db.GetUsers(ctx)
+	users, err := s.Db.GetUsers(ctx)
 	if err != nil {
 		return err
 	}
 	for _, user := range users {
-		if user.Name == s.cfg.CurrentUserName {
+		if user.Name == s.Cfg.CurrentUserName {
 			fmt.Printf("* %s (current)\n", user.Name)
 		} else {
 			fmt.Printf("* %s\n", user.Name)
@@ -70,14 +61,14 @@ func handleUsers(s *state, cmd command) error {
 	return nil
 }
 
-func handleRegister(s *state, cmd command) error {
-	if len(cmd.args) == 0 {
+func handleRegister(s *app.State, cmd app.Command) error {
+	if len(cmd.Args) == 0 {
 		return fmt.Errorf("the register handler expects a single argument, the username")
 	}
-	userName := cmd.args[0]
+	userName := cmd.Args[0]
 
 	ctx := context.Background()
-	user, err := s.db.CreateUser(ctx, database.CreateUserParams{
+	user, err := s.Db.CreateUser(ctx, database.CreateUserParams{
 		ID:   uuid.New(),
 		Name: userName,
 		CreatedAt: sql.NullTime{
@@ -94,7 +85,7 @@ func handleRegister(s *state, cmd command) error {
 		return err
 	}
 
-	err = s.cfg.SetUser(userName)
+	err = s.Cfg.SetUser(userName)
 	if err != nil {
 		return err
 	}
@@ -104,18 +95,18 @@ func handleRegister(s *state, cmd command) error {
 	return nil
 }
 
-func handlerLogin(s *state, cmd command) error {
-	if len(cmd.args) == 0 {
+func handlerLogin(s *app.State, cmd app.Command) error {
+	if len(cmd.Args) == 0 {
 		return fmt.Errorf("the login handler expects a single argument, the username")
 	}
 
-	userName := cmd.args[0]
+	userName := cmd.Args[0]
 	ctx := context.Background()
-	user, err := s.db.GetUserByName(ctx, userName)
+	user, err := s.Db.GetUserByName(ctx, userName)
 	if err != nil {
 		return fmt.Errorf("user does not exist in the databse. please use register")
 	}
-	err = s.cfg.SetUser(userName)
+	err = s.Cfg.SetUser(userName)
 	if err != nil {
 		return err
 	}
@@ -124,9 +115,9 @@ func handlerLogin(s *state, cmd command) error {
 	return nil
 }
 
-func scrapeFeeds(s *state) error {
+func scrapeFeeds(s *app.State) error {
 	ctx := context.Background()
-	feedToFetch, err := s.db.GetNextFeedToFetch(ctx)
+	feedToFetch, err := s.Db.GetNextFeedToFetch(ctx)
 	if err != nil {
 		return fmt.Errorf("error retrieving next feed to fetch, %w", err)
 	}
@@ -137,7 +128,7 @@ func scrapeFeeds(s *state) error {
 		return err
 	}
 
-	_, err = s.db.MarkFeedFetchedById(ctx, database.MarkFeedFetchedByIdParams{
+	_, err = s.Db.MarkFeedFetchedById(ctx, database.MarkFeedFetchedByIdParams{
 		ID: feedToFetch.ID,
 		LastFetchedAt: sql.NullTime{
 			Time:  time.Now(),
@@ -155,7 +146,7 @@ func scrapeFeeds(s *state) error {
 		if err != nil {
 			return fmt.Errorf("error parsing publish date, %w", err)
 		}
-		_, err = s.db.CreatePost(ctx, database.CreatePostParams{
+		_, err = s.Db.CreatePost(ctx, database.CreatePostParams{
 			ID: uuid.New(),
 			CreatedAt: sql.NullTime{
 				Time:  time.Now(),
@@ -191,12 +182,12 @@ func scrapeFeeds(s *state) error {
 	return nil
 }
 
-func handleAggregator(s *state, cmd command) error {
-	if len(cmd.args) < 1 {
+func handleAggregator(s *app.State, cmd app.Command) error {
+	if len(cmd.Args) < 1 {
 		return fmt.Errorf("missing arguments. syntax: agg <time_between_reqs>")
 	}
 
-	duration, err := time.ParseDuration(cmd.args[0])
+	duration, err := time.ParseDuration(cmd.Args[0])
 	if err != nil {
 		return fmt.Errorf("error parsing time_between_reqs. Valid examples: 1s, 10h10m1s, 10m etc, Error: %w", err)
 	}
@@ -210,16 +201,16 @@ func handleAggregator(s *state, cmd command) error {
 	}
 }
 
-func handleAddFeed(s *state, cmd command, user database.User) error {
-	if len(cmd.args) < 2 {
-		return fmt.Errorf("not enough arguments, command syntax: addfeed <feed_name> <feed_url>")
+func handleAddFeed(s *app.State, cmd app.Command, user database.User) error {
+	if len(cmd.Args) < 2 {
+		return fmt.Errorf("not enough arguments, app.Command syntax: addfeed <feed_name> <feed_url>")
 	}
 
 	ctx := context.Background()
-	feed, err := s.db.CreateFeed(ctx, database.CreateFeedParams{
+	feed, err := s.Db.CreateFeed(ctx, database.CreateFeedParams{
 		ID:   uuid.New(),
-		Name: cmd.args[0],
-		Url:  cmd.args[1],
+		Name: cmd.Args[0],
+		Url:  cmd.Args[1],
 		CreatedAt: sql.NullTime{
 			Time:  time.Now(),
 			Valid: true,
@@ -235,7 +226,7 @@ func handleAddFeed(s *state, cmd command, user database.User) error {
 		return fmt.Errorf("error creating a new feed, %w", err)
 	}
 
-	feed_follow, err := s.db.CreateFeedFollow(ctx, database.CreateFeedFollowParams{
+	feed_follow, err := s.Db.CreateFeedFollow(ctx, database.CreateFeedFollowParams{
 		CreatedAt: sql.NullTime{
 			Time:  time.Now(),
 			Valid: true,
@@ -260,13 +251,13 @@ func handleAddFeed(s *state, cmd command, user database.User) error {
 
 }
 
-func handleRemoveFeed(s *state, cmd command, user database.User) error {
-	if len(cmd.args) < 1 {
+func handleRemoveFeed(s *app.State, cmd app.Command, user database.User) error {
+	if len(cmd.Args) < 1 {
 		return fmt.Errorf("missing arguments. Syntax: removefeed <feed_url>")
 	}
 
-	deletedFeed, err := s.db.DeleteFeedByUrlAndUser(context.Background(), database.DeleteFeedByUrlAndUserParams{
-		Url:    cmd.args[0],
+	deletedFeed, err := s.Db.DeleteFeedByUrlAndUser(context.Background(), database.DeleteFeedByUrlAndUserParams{
+		Url:    cmd.Args[0],
 		UserID: user.ID,
 	})
 
@@ -278,9 +269,9 @@ func handleRemoveFeed(s *state, cmd command, user database.User) error {
 	return nil
 }
 
-func handleFeeds(s *state, cmd command) error {
+func handleFeeds(s *app.State, cmd app.Command) error {
 	ctx := context.Background()
-	feeds, err := s.db.GetAllFeeds(ctx)
+	feeds, err := s.Db.GetAllFeeds(ctx)
 	if err != nil {
 		return fmt.Errorf("error getting all the feeds, %w", err)
 	}
@@ -291,18 +282,18 @@ func handleFeeds(s *state, cmd command) error {
 	return nil
 }
 
-func handleFollow(s *state, cmd command, user database.User) error {
-	if len(cmd.args) < 1 {
+func handleFollow(s *app.State, cmd app.Command, user database.User) error {
+	if len(cmd.Args) < 1 {
 		return fmt.Errorf("follow command expects a feed url")
 	}
 
 	ctx := context.Background()
-	feed, err := s.db.GetFeedByUrl(ctx, cmd.args[0])
+	feed, err := s.Db.GetFeedByUrl(ctx, cmd.Args[0])
 	if err != nil {
 		return fmt.Errorf("error while getting feed by url, %w", err)
 	}
 
-	feed_follow, err := s.db.CreateFeedFollow(ctx, database.CreateFeedFollowParams{
+	feed_follow, err := s.Db.CreateFeedFollow(ctx, database.CreateFeedFollowParams{
 		CreatedAt: sql.NullTime{
 			Time:  time.Now(),
 			Valid: true,
@@ -324,9 +315,9 @@ func handleFollow(s *state, cmd command, user database.User) error {
 	return nil
 }
 
-func handleFollowing(s *state, cmd command, user database.User) error {
+func handleFollowing(s *app.State, cmd app.Command, user database.User) error {
 	ctx := context.Background()
-	feed_follows, err := s.db.GetFeedFollowsForUser(ctx, user.ID)
+	feed_follows, err := s.Db.GetFeedFollowsForUser(ctx, user.ID)
 	if err != nil {
 		return fmt.Errorf("error while getting feed follows, %w", err)
 	}
@@ -338,13 +329,13 @@ func handleFollowing(s *state, cmd command, user database.User) error {
 	return nil
 }
 
-func handleUnfollow(s *state, cmd command, user database.User) error {
-	if len(cmd.args) < 1 {
+func handleUnfollow(s *app.State, cmd app.Command, user database.User) error {
+	if len(cmd.Args) < 1 {
 		return fmt.Errorf("not enough arguments. Need feed_url. Syntax: unfollow <feed_url>")
 	}
 
-	err := s.db.DeleteFeedFollowByFeedUrlAndUserId(context.Background(), database.DeleteFeedFollowByFeedUrlAndUserIdParams{
-		Url:    cmd.args[0],
+	err := s.Db.DeleteFeedFollowByFeedUrlAndUserId(context.Background(), database.DeleteFeedFollowByFeedUrlAndUserIdParams{
+		Url:    cmd.Args[0],
 		UserID: user.ID,
 	})
 
@@ -357,17 +348,17 @@ func handleUnfollow(s *state, cmd command, user database.User) error {
 	return nil
 }
 
-func handleBrowse(s *state, cmd command, user database.User) error {
+func handleBrowse(s *app.State, cmd app.Command, user database.User) error {
 
 	limit := 2
-	if len(cmd.args) > 0 {
-		l, err := strconv.Atoi(cmd.args[0])
+	if len(cmd.Args) > 0 {
+		l, err := strconv.Atoi(cmd.Args[0])
 		if err != nil {
 			return fmt.Errorf("error parsing argument limit, %w", err)
 		}
 		limit = l
 	}
-	posts, err := s.db.GetPostsForUser(context.Background(), database.GetPostsForUserParams{
+	posts, err := s.Db.GetPostsForUser(context.Background(), database.GetPostsForUserParams{
 		UserID: user.ID,
 		Limit:  int32(limit),
 	})
@@ -393,11 +384,11 @@ func handleBrowse(s *state, cmd command, user database.User) error {
 }
 
 func middlewareLoggedIn(
-	handler func(s *state, cmd command, user database.User) error,
-) func(*state, command) error {
-	return func(s *state, cmd command) error {
+	handler func(s *app.State, cmd app.Command, user database.User) error,
+) func(*app.State, app.Command) error {
+	return func(s *app.State, cmd app.Command) error {
 		ctx := context.Background()
-		user, err := s.db.GetUserByName(ctx, s.cfg.CurrentUserName)
+		user, err := s.Db.GetUserByName(ctx, s.Cfg.CurrentUserName)
 		if err != nil {
 			return fmt.Errorf("error while getting current user information, %w", err)
 		}
@@ -421,16 +412,16 @@ func main() {
 		os.Exit(1)
 	}
 
-	// init state with config and database query
+	// init app.State with config and database query
 	dbQueries := database.New(db)
-	s := &state{
-		cfg: cfg,
-		db:  dbQueries,
+	s := &app.State{
+		Cfg: cfg,
+		Db:  dbQueries,
 	}
 
 	// create commands
 	cmds := commands{
-		cmdHandlerMap: make(map[string]func(*state, command) error),
+		cmdHandlerMap: make(map[string]func(*app.State, app.Command) error),
 	}
 	cmds.register("login", handlerLogin)
 	cmds.register("register", handleRegister)
@@ -451,14 +442,14 @@ func main() {
 		os.Exit(1)
 	}
 
-	cmd := command{
-		name: os.Args[1],
-		args: os.Args[2:],
+	cmd := app.Command{
+		Name: os.Args[1],
+		Args: os.Args[2:],
 	}
 	err = cmds.run(s, cmd)
 
 	if err != nil {
-		fmt.Printf("Error executing %s: %v\n", cmd.name, err)
+		fmt.Printf("Error executing %s: %v\n", cmd.Name, err)
 		os.Exit(1)
 	}
 
