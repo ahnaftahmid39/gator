@@ -52,6 +52,7 @@ func main() {
 	cmds.Register("users", handlers.HandleUsers)
 	cmds.Register("unfollow", middlewares.LoggedIn(handlers.HandleUnfollow))
 	cmds.Register("removefeed", middlewares.LoggedIn(handlers.HandleRemoveFeed))
+	cmds.Register("help", handlers.HandleHelp)
 
 	// handle command
 	if len(os.Args) < 2 {
